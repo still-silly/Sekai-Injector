@@ -21,7 +21,7 @@ This injects a simple modified scenario into Project Sekai, resulting in custom 
 https://github.com/user-attachments/assets/67990292-ff0b-4ed7-a8fb-09c073507db1
 
 It uses the following injections.toml: 
-```
+```toml
 map = [
     [
         "/3.5.1.0/bd3262f3-34ab-401d-bf97-be9f427484d5/android/event_story/event_whip_2024/scenario",
@@ -41,7 +41,7 @@ Where `whip-2024-scenario-override-encrypted` was modified using [UABE](https://
 #### Config
 Modify the config file to match your needs:
 
-```
+```toml
 inject_resources = true                     # Is the program enabled?
 target_ip = "192.168.86.183"                # What IP should the certificate be valid for?
 
@@ -60,7 +60,7 @@ server_key = "server_key_ab.pem"            # Server key path
 ```
 
 And modify injections-ab.toml:
-```
+```toml
 map = [
     [
         "/path/on/origin/to/override",
