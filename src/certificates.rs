@@ -224,7 +224,7 @@ pub fn generate_certs_interactive(config_holder: &Config) {
 
     info!(
         "\nFinished generating CA and certificates. Remember to NEVER share the following files with anyone else: \n{}\n{}\n{:?}\n{:?}",
-        &ca_cert_file_path, &ca_cert_key_path, &cert_file_out_paths, &cert_key_out_paths
+        ca_cert_file_path, ca_cert_key_path, cert_file_out_paths, cert_key_out_paths
     );
 }
 
