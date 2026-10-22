@@ -40,7 +40,7 @@ struct StartOptions {}
 struct GenerateCertsOptions {}
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = CommandOptions::parse_args_default_or_exit();
 
     let mut builder = env_logger::Builder::new();
@@ -79,7 +79,7 @@ async fn main() {
 
         // Create a client to handle making HTTPS requests
         let https = HttpsConnectorBuilder::new()
-            .with_webpki_roots()
+            .with_native_roots()?
             .https_or_http()
             .enable_all_versions()
             .build();
@@ -99,4 +99,6 @@ async fn main() {
 
         server::serve(manager).await;
     }
+
+    Ok(())
 }
