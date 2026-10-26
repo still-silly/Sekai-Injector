@@ -254,102 +254,147 @@ pub fn load_certs(domains: &Vec<Domain>) -> Result<CustomCertResolver, anyhow::E
 
 #[cfg(test)]
 mod tests {
-    use openssl::{ec::EcKey, nid::Nid, x509::X509};
-    use tempfile::NamedTempFile;
-
     use super::{generate_ca, new_self_signed_cert};
     use crate::CertificateGenParams;
+    use openssl::{
+        nid::Nid,
+        pkey::PKey,
+        x509::{X509NameRef, X509},
+    };
+    use std::{path::PathBuf, sync::OnceLock};
+
+    trait X509NameSource {
+        fn x509_name(&self) -> &X509NameRef;
+    }
+
+    impl X509NameSource for X509 {
+        fn x509_name(&self) -> &X509NameRef {
+            self.subject_name()
+        }
+    }
+
+    impl X509NameSource for X509NameRef {
+        fn x509_name(&self) -> &X509NameRef {
+            self
+        }
+    }
+
+    fn assert_nid_field(source: &impl X509NameSource, nid: Nid, expected: &str) {
+        assert_eq!(
+            source
+                .x509_name()
+                .entries_by_nid(nid)
+                .next()
+                .unwrap()
+                .data()
+                .to_string()
+                .unwrap(),
+            expected
+        );
+    }
+
+    struct GeneratedCerts {
+        _tempdir: tempfile::TempDir,
+        ca_cert: PathBuf,
+        server_cert: PathBuf,
+        server_key: PathBuf,
+    }
+
+    fn generated_certs() -> &'static GeneratedCerts {
+        static CERTS: OnceLock<GeneratedCerts> = OnceLock::new();
+
+        CERTS.get_or_init(|| {
+            let tempdir = tempfile::tempdir().unwrap();
+            let ca_cert = tempdir.path().join("ca-cert.pem");
+            let ca_key = tempdir.path().join("ca-key.pem");
+            let server_cert = tempdir.path().join("cert.pem");
+            let server_key = tempdir.path().join("cert-key.pem");
+
+            generate_ca(
+                "Sekai Injector Test CA",
+                360,
+                ca_cert.to_str().unwrap(),
+                ca_key.to_str().unwrap(),
+            )
+            .unwrap();
+
+            new_self_signed_cert(CertificateGenParams {
+                ca_cert_pem_path: ca_cert.to_str().unwrap(),
+                ca_key_pem_path: ca_key.to_str().unwrap(),
+                target_hostname: "example.com",
+                target_ip: "127.0.0.1",
+                distinguished_common_name: "Sekai Injector Test",
+                cert_file_out_path: server_cert.to_str().unwrap(),
+                cert_key_out_path: server_key.to_str().unwrap(),
+                cert_lifetime_days: 360,
+            })
+            .unwrap();
+
+            GeneratedCerts {
+                _tempdir: tempdir,
+                ca_cert,
+                server_cert,
+                server_key,
+            }
+        })
+    }
+
+    fn load_ca_cert() -> X509 {
+        X509::from_pem(&std::fs::read(&generated_certs().ca_cert).expect("Unable to read CA cert"))
+            .unwrap()
+    }
+
+    fn load_server_cert() -> X509 {
+        X509::from_pem(
+            &std::fs::read(&generated_certs().server_cert).expect("Unable to read server cert"),
+        )
+        .unwrap()
+    }
 
     #[test]
-    fn cert_generation() {
-        let ca_cert_pem_path = NamedTempFile::new().unwrap().into_temp_path();
-        let ca_cert_pem_path = ca_cert_pem_path.to_str().unwrap();
+    fn ca_certificate_has_expected_subject() {
+        let cert = load_ca_cert();
 
-        let ca_key_pem_path = NamedTempFile::new().unwrap().into_temp_path();
-        let ca_key_pem_path = ca_key_pem_path.to_str().unwrap();
+        assert_nid_field(&cert, Nid::COMMONNAME, "Sekai Injector Test CA");
+        assert_nid_field(&cert, Nid::ORGANIZATIONNAME, "Sekai Injector Organization");
+    }
 
-        let cert_file_out_path = NamedTempFile::new().unwrap().into_temp_path();
-        let cert_file_out_path = cert_file_out_path.to_str().unwrap();
+    #[test]
+    fn server_certificate_has_expected_issuer() {
+        let cert = load_server_cert();
 
-        let cert_key_out_path = NamedTempFile::new().unwrap().into_temp_path();
-        let cert_key_out_path = cert_key_out_path.to_str().unwrap();
-
-        generate_ca(
+        assert_nid_field(
+            cert.issuer_name(),
+            Nid::COMMONNAME,
             "Sekai Injector Test CA",
-            360,
-            ca_cert_pem_path,
-            ca_key_pem_path,
-        )
-        .unwrap();
+        );
+        assert_nid_field(
+            cert.issuer_name(),
+            Nid::ORGANIZATIONNAME,
+            "Sekai Injector Organization",
+        );
+    }
 
-        new_self_signed_cert(CertificateGenParams {
-            ca_cert_pem_path,
-            ca_key_pem_path,
-            target_hostname: "example.com",
-            target_ip: "127.0.0.1",
-            distinguished_common_name: "Sekai Injector Test",
-            cert_file_out_path,
-            cert_key_out_path,
-            cert_lifetime_days: 360,
-        })
-        .unwrap();
+    #[test]
+    fn server_certificate_has_expected_subject_alt_names() {
+        let cert = load_server_cert();
+        let alt_names = cert.subject_alt_names().unwrap();
 
-        // Test CA Cert
+        assert!(alt_names
+            .iter()
+            .any(|name| name.dnsname() == Some("example.com")));
+        assert!(alt_names
+            .iter()
+            .any(|name| name.ipaddress() == Some(&[127, 0, 0, 1])));
+    }
 
-        let cert = std::fs::read(ca_cert_pem_path).expect("Unable to read file");
+    #[test]
+    fn server_key_matches_certificate() {
+        let cert = load_server_cert();
+        let key_pem =
+            std::fs::read(&generated_certs().server_key).expect("Unable to read server key");
+        let private_key = PKey::private_key_from_pem(&key_pem).unwrap();
 
-        let res = X509::from_pem(&cert).unwrap();
-        let debugged = format!("{res:#?}");
-
-        // Check common name
-        assert!(debugged.contains("commonName = \"Sekai Injector Test CA\""));
-
-        // Check organization name
-        assert!(debugged.contains("organizationName = \"Sekai Injector Organization\""));
-
-        // Test CA Key
-
-        let cert = std::fs::read(ca_key_pem_path).expect("Unable to read file");
-
-        match EcKey::private_key_from_pem(&cert) {
-            Ok(ec_key) => {
-                let group = ec_key.group();
-                let curve_name = group.curve_name().unwrap_or(Nid::UNDEF);
-                assert_eq!(format!("{curve_name:?}"), "Nid(415)");
-            }
-            Err(e) => {
-                panic!("Failed to parse ECDSA private key: {e}");
-            }
-        }
-
-        // Test server cert
-        let cert = std::fs::read(cert_file_out_path).expect("Unable to read file");
-
-        let res = X509::from_pem(&cert).unwrap();
-        let debugged = format!("{res:#?}");
-
-        // Check common name
-        assert!(debugged.contains("commonName = \"Sekai Injector Test CA\""));
-
-        // Check organization name
-        assert!(debugged.contains("organizationName = \"Sekai Injector Organization\""));
-
-        // Check alt names
-        assert!(debugged.contains("example.com"));
-        assert!(debugged.contains("127.0.0.1"));
-
-        // Test server key
-        let cert = std::fs::read(cert_key_out_path).expect("Unable to read file");
-
-        match EcKey::private_key_from_pem(&cert) {
-            Ok(ec_key) => {
-                let group = ec_key.group();
-                let curve_name = group.curve_name().unwrap_or(Nid::UNDEF);
-                assert_eq!(format!("{curve_name:?}"), "Nid(415)");
-            }
-            Err(e) => {
-                panic!("Failed to parse ECDSA private key: {e}");
-            }
-        }
+        assert!(cert.public_key().unwrap().public_eq(&private_key));
     }
 }
